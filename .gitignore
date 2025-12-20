@@ -1,0 +1,82 @@
+# ================================
+# PYTHON
+# ================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.env
+.env.*
+venv/
+isl_env/
+.venv/
+pip-wheel-metadata/
+
+# ================================
+# JUPYTER / IPYNB
+# ================================
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ================================
+# ML / DATA ARTIFACTS
+# ================================
+*.keras
+*.h5
+*.pt
+*.onnx
+*.pkl
+*.joblib
+
+# Training outputs / visualizations
+training_history.png
+confusion_matrix.png
+runs/
+predictions/
+predictions2/
+
+# Large datasets (DO NOT COMMIT)
+Indian Sign Language Greetings Dataset - Sub Variant of INCLUDE/
+*.mp4
+*.avi
+
+# ================================
+# LOGS & TEMP FILES
+# ================================
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# ================================
+# FRONTEND (VITE + REACT)
+# ================================
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+
+# ================================
+# BUILD / CACHE
+# ================================
+.cache/
+.parcel-cache/
+.vite/
+.eslintcache
+
+# ================================
+# IDE / EDITOR
+# ================================
+.vscode/
+.idea/
+*.code-workspace
+
+# ================================
+# OS FILES
+# ================================
+.DS_Store
+desktop.ini

@@ -1,0 +1,7 @@
+flask
+flask-cors
+tensorflow
+mediapipe
+opencv-python
+numpy
+protobuf<4.0.0
