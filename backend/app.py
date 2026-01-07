@@ -1,8 +1,22 @@
 import os
+# Suppress TensorFlow/MediaPipe logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import cv2
 import numpy as np
 import mediapipe as mp
 import tensorflow as tf
+
+# Monkey Patch for Protobuf <-> TF compatibility issues (Windows)
+# Fixes: module 'google.protobuf.message_factory' has no attribute 'GetMessageClass'
+import google.protobuf.message_factory
+if not hasattr(google.protobuf.message_factory, 'GetMessageClass'):
+    try:
+        google.protobuf.message_factory.GetMessageClass = google.protobuf.message_factory.MessageFactory().GetMessageClass
+        print("✅ Applied monkey patch for google.protobuf.message_factory.GetMessageClass")
+    except Exception as e:
+        print(f"⚠️ Could not apply monkey patch: {e}")
+
 import pickle
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -153,50 +167,47 @@ def predict():
         # Process video
         frames = process_video(video_path)
         
+        # 1. Handle empty input
         if not frames:
             return jsonify({
                 "prediction": "No Motion",
                 "confidence": 0.0,
                 "message": "No frames processed"
-            })
+        })
 
-        # Check if actual landmarks were detected in the frames
-        # Each frame is (1662,) float array. If all normalized to 0 or close to 0??
-        # relative_normalize uses lh, rh, pose. If MediaPipe finds nothing, they are 0s.
-        # But relative_normalize handles 0s.
-        # Let's check non-zero count or variance.
-        
+        # 2. Convert to numpy array (ensure 2D)
         sequence = np.array(frames)
         
-        # Check if meaningful content exists (heuristic)
-        # If mean absolute value is very low, it might be just empty landmarks
-        if np.mean(np.abs(sequence)) < 1e-4:
-             return jsonify({
-                "prediction": "No Hands Detected", 
-                "confidence": 0.0
+        # 3. MOTION GATING (CRITICAL)
+        motion_score = np.mean(np.abs(sequence))
+
+        if motion_score < 0.01:
+            return jsonify({
+                "prediction": "No Motion",
+                "confidence": 0.0,
+                "motion_score": float(motion_score)
             })
 
-        # Pad or Truncate to MAX_FRAMES
+
+        # 4. Normalize Length (Pad or Sample)
         if len(sequence) < MAX_FRAMES:
+            # Pad with zeros
             padding = np.zeros((MAX_FRAMES - len(sequence), sequence.shape[1]))
             sequence = np.vstack([sequence, padding])
         else:
-            # Sampling Strategy:
-            # Instead of taking just the first 60, ideally we should take 60 frames evenly distributed
-            # OR take the middle section if it's a long video.
-            # For 3s (90 frames) -> 60 frames. 
-            # Linear sampling:
+            # Timestep Sampling (evenly distributed)
             indices = np.linspace(0, len(sequence) - 1, MAX_FRAMES, dtype=int)
             sequence = sequence[indices]
 
+        # 5. Expand dims for model (1, 60, 1662)
         sequence = np.expand_dims(sequence, axis=0)
         
-        # Predict
+        # 6. Predict
         probs = model.predict(sequence, verbose=0)[0]
         pred_idx = np.argmax(probs)
         confidence = float(probs[pred_idx])
         
-        # Filter low confidence
+        # 7. Confidence Threshold
         if confidence < 0.4:
             prediction = "Uncertain"
         else:
@@ -212,6 +223,8 @@ def predict():
         })
         
     except Exception as e:
+        import traceback
+        traceback.print_exc() # Print full stack trace to backend terminal
         return jsonify({"error": str(e)}), 500
     finally:
         if os.path.exists(video_path):
@@ -239,4 +252,4 @@ def get_signs():
     return jsonify(signs)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=True)

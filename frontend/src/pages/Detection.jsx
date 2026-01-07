@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
-  Camera,
   Upload,
   Play,
   Square,
@@ -13,159 +12,48 @@ import axios from "axios";
 import clsx from "clsx";
 
 const Detection = () => {
-  const [mode, setMode] = useState("camera"); // 'camera' or 'upload'
   const [isDetecting, setIsDetecting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
-  const [stream, setStream] = useState(null);
   const [uploadFile, setUploadFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
 
-  // Refs for state that needs to be accessed in closures/intervals
+  // Refs for state that needs to be accessed in closures
   const isDetectingRef = useRef(false);
-  const streamRef = useRef(null);
-  const videoRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const intervalRef = useRef(null);
 
-  // Camera Setup Effect
   useEffect(() => {
-    let isMounted = true;
-
-    const initCamera = async () => {
-      if (mode === "camera" && isCameraActive) {
-        try {
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-          });
-
-          if (!isMounted || mode !== "camera" || !isCameraActive) {
-            mediaStream.getTracks().forEach((track) => track.stop());
-            return;
-          }
-
-          setStream(mediaStream);
-          streamRef.current = mediaStream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = mediaStream;
-          }
-        } catch (err) {
-          console.error("Error accessing camera:", err);
-          alert("Could not access camera. Please check permissions.");
-          setIsCameraActive(false);
-        }
-      } else {
-        cleanupCamera();
+    return () => {
+      // Cleanup preview URL on unmount
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
       }
     };
-
-    if (mode === "camera" && isCameraActive) {
-      initCamera();
-    } else {
-      cleanupCamera();
-    }
-
-    return () => {
-      isMounted = false;
-      cleanupCamera();
-    };
-  }, [mode, isCameraActive]);
-
-  const cleanupCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      setStream(null);
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  };
-
-  const toggleCamera = () => {
-    setIsCameraActive(!isCameraActive);
-    if (isDetecting) stopDetection();
-  };
+  }, [previewUrl]);
 
   const handleUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
       setUploadFile(file);
       setPreviewUrl(URL.createObjectURL(file));
+      // Reset state on new file
+      setResult(null);
+      setIsDetecting(false);
+      isDetectingRef.current = false;
     }
   };
 
   const startDetection = () => {
     setIsDetecting(true);
     isDetectingRef.current = true;
-
-    if (mode === "camera") {
-      startRecordingLoop();
-    } else {
-      processUpload();
-    }
+    processUpload();
   };
 
   const stopDetection = () => {
     setIsDetecting(false);
     isDetectingRef.current = false;
-
     setIsLoading(false);
     setResult(null);
-
-    // Clear Loop
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-
-    // Stop Recorder
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
-    ) {
-      mediaRecorderRef.current.stop();
-    }
-  };
-
-  const startRecordingLoop = () => {
-    if (!streamRef.current) return;
-
-    const recordAndSend = () => {
-      if (!isDetectingRef.current) return;
-
-      chunksRef.current = [];
-      const recorder = new MediaRecorder(streamRef.current, {
-        mimeType: "video/webm",
-      });
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = async () => {
-        // Strict check: if detection stopped, Do NOT process this chunk
-        if (!isDetectingRef.current) return;
-
-        const blob = new Blob(chunksRef.current, { type: "video/webm" });
-        if (blob.size > 0) {
-          await sendToBackend(blob);
-        }
-      };
-
-      recorder.start();
-      setTimeout(() => {
-        if (recorder.state !== "inactive") recorder.stop();
-      }, 3000); // 3 seconds chunk
-    };
-
-    recordAndSend();
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(recordAndSend, 3500);
   };
 
   const processUpload = async () => {
@@ -173,7 +61,6 @@ const Detection = () => {
     setIsLoading(true);
     await sendToBackend(uploadFile);
     setIsDetecting(false); // One-off for upload
-    // Sync ref
     isDetectingRef.current = false;
     setIsLoading(false);
   };
@@ -183,7 +70,6 @@ const Detection = () => {
     formData.append("video", blob, "video.webm");
 
     try {
-      if (mode === "camera") setIsLoading(true); // Show loader during process
       const response = await axios.post(
         "http://localhost:5000/predict",
         formData,
@@ -192,33 +78,33 @@ const Detection = () => {
         }
       );
 
-      // CRITICAL FIX: Ignore response if detection stopped
-      if (mode === "camera" && !isDetectingRef.current) {
+      // Ignore response if detection stopped
+      if (!isDetectingRef.current) {
         return;
       }
 
       if (response.data.error) {
         console.error("Backend Error:", response.data.error);
-        // We could also set a dedicated error state here if result needs to show it
       }
 
       console.log(response.data);
       setResult(response.data);
-      if (response.data.prediction && response.data.confidence > 0.5) {
+      if (
+        response.data.prediction &&
+        response.data.confidence > 0.6 &&
+        response.data.prediction !== "No Motion"
+      ) {
         setHistory((prev) => [...prev, response.data.prediction]);
       }
     } catch (error) {
-      if (mode === "camera" && !isDetectingRef.current) return; // Ignore errors if stopped
+      if (!isDetectingRef.current) return;
       console.error(error);
       const msg = error.response?.data?.error || error.message;
       alert(
         `Backend Error: ${msg}. If this persists, please restart the backend server.`
       );
     } finally {
-      // Only unset loading if still running or if upload mode
-      if ((mode === "camera" && isDetectingRef.current) || mode === "upload") {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     }
   };
 
@@ -234,67 +120,16 @@ const Detection = () => {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold">Sign Language Detection</h1>
+          <p className="text-gray-400 mt-2">Upload a video to get sign predictions</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
           {/* Left Column: Input */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Mode Toggle */}
-            <div className="flex bg-surface rounded-lg p-1 w-fit mb-4 border border-white/10">
-              <button
-                onClick={() => {
-                  setMode("camera");
-                  setIsCameraActive(false);
-                  stopDetection();
-                }}
-                className={clsx(
-                  "px-4 py-2 rounded-md flex items-center gap-2 transition-colors",
-                  mode === "camera"
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-400 hover:text-white"
-                )}
-              >
-                <Camera size={18} /> Use Camera
-              </button>
-              <button
-                onClick={() => {
-                  setMode("upload");
-                  stopDetection();
-                }}
-                className={clsx(
-                  "px-4 py-2 rounded-md flex items-center gap-2 transition-colors",
-                  mode === "upload"
-                    ? "bg-blue-600 text-white"
-                    : "text-gray-400 hover:text-white"
-                )}
-              >
-                <Upload size={18} /> Upload Video
-              </button>
-            </div>
-
+            
             {/* Viewport */}
             <div className="aspect-video bg-black rounded-xl overflow-hidden relative border border-white/10 shadow-lg">
-              {mode === "camera" ? (
-                isCameraActive ? (
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    muted
-                    playsInline
-                    className="w-full h-full object-cover transform scale-x-[-1]"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                    <Camera size={48} />
-                    <button
-                      onClick={toggleCamera}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-full font-medium transition-colors"
-                    >
-                      Turn On Camera
-                    </button>
-                  </div>
-                )
-              ) : previewUrl ? (
+              {previewUrl ? (
                 <video
                   src={previewUrl}
                   controls
@@ -333,17 +168,10 @@ const Detection = () => {
 
             {/* Controls */}
             <div className="flex justify-center mt-4">
-              {mode === "camera" && !isCameraActive ? (
-                <p className="text-gray-500 text-sm">
-                  Turn on camera to start detection
-                </p>
-              ) : !isDetecting ? (
+               {!isDetecting ? (
                 <button
                   onClick={startDetection}
-                  disabled={
-                    (mode === "upload" && !uploadFile) ||
-                    (mode === "camera" && !isCameraActive)
-                  }
+                  disabled={!uploadFile}
                   className="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-3 rounded-full font-semibold flex items-center gap-2 shadow-lg transition-all hover:scale-105"
                 >
                   <Play size={20} /> Start Detection
